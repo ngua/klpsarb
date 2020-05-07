@@ -1,0 +1,164 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import logging
+import argparse
+import requests
+import praw
+from time import sleep
+from unicodedata import normalize
+from bs4 import BeautifulSoup
+from prawcore.exceptions import ResponseException
+
+
+class Bot:
+    KEYWORDS = ['kali']
+    USER_AGENT = 'Mozilla/5.0 (X11; ; Linux i686; rv:1.9.2.20) Gecko/20110805'
+    DOCS_URL = 'https://kali.org/docs/introduction/should-i-use-kali-linux/'
+
+    def __init__(self, reddit, subreddit):
+        self.subreddit = reddit.subreddit(subreddit)
+        self._doc_message = ''
+        logging.basicConfig(level=logging.INFO)
+        self.logger = logging.getLogger('**KLPSARB**')
+        self.logger.info(
+            f'KLPSARB initialized. Scanning r/{subreddit} for new submissions '
+        )
+
+    def scan(self):
+        response = self._make_docs_request()
+        if response is not None:
+            self.doc_message = response
+        for submission in self.subreddit.stream.submissions():
+            self.process(submission)
+
+    def process(self, submission):
+        title = submission.title.lower()
+        for keyword in self.KEYWORDS:
+            if keyword in title:
+                message = self._response_template(
+                    submission.author,
+                    submission.title
+                )
+                submission.reply(message)
+                self.logger.info(f'Replied to {submission.author}')
+                break
+
+    @property
+    def doc_message(self):
+        return self._doc_message
+
+    @doc_message.setter
+    def doc_message(self, response):
+        soup = BeautifulSoup(response, 'lxml')
+        title = soup.find(id='is-kali-linux-right-for-you')
+        if title is None:
+            return
+        p_tag = title.next_sibling
+        message = normalize(
+            'NFKD',
+            p_tag.text.encode('iso-8859-1', 'ignore').decode()
+        )
+        self._doc_message = message if message else ''
+
+    def _make_docs_request(self):
+        headers = {
+            'User-Agent': self.USER_AGENT
+        }
+        try:
+            response = requests.get(self.DOCS_URL, headers=headers)
+        except requests.RequestException as e:
+            self.logger.exception(
+                'Failed to fetch Kali Docs: '
+                f'{type(e)}'
+            )
+            return
+        if (status := response.status_code) > 400:
+            self.logger.error(
+                'Failed to fetch Kali Docs: '
+                f'{status}'
+            )
+            return
+        return response.text
+
+    def _response_template(self, author, title):
+        header = 'Kali Linux PSA Bot Here! '
+        body = (
+            f'Hello, u/{author}! '
+            'I noticed your OP mentioned Kali Linux. There have been a lot of '
+            'posts from Linux beginners asking questions about Kali and other '
+            "pentesting distros who don't have the requisite knowledge to "
+            '**safely** and effectively use a highly specialized distro like '
+            'Kali. '
+            'If you are using Kali as a daily driver or have installed it on '
+            'bare metal, please be aware that it is not intended to be used '
+            'for daily use, is not intended to be installed persitently '
+            'on hardware, and runs as root by default, which is unsafe for '
+            'day-to-day use cases.'
+        )
+
+        doc_message = (
+            'Before using Kali, you should ask yourself if you are its '
+            "intended audience.  From Kali's official docs: "
+            '\n'
+            f"> {self.doc_message}"
+        ) if self.doc_message else '\n'
+
+        end = (
+            "If you're serious about becoming a pentester, you'll need to "
+            'know networking, scripting, and lot more. You can and should '
+            'learn these skills on any mainstream Linux distro. Why not start '
+            'out with a popular, well-documented distro instead of Kali? You '
+            'can download most of the tools bundled with Kali in most major '
+            'distros, either in their official repositories or through using '
+            'third-party  sources. '
+        )
+
+        footer = (
+            "**I'm a bot.** "
+            f'This post was made because the OP, _{title}_, mentions Kali '
+            'Linux. If you feel that the content of this message does not '
+            'apply to you, please downvote me. '
+        )
+
+        template = '\n\n'.join([header, body, doc_message, end, footer])
+        return template
+
+
+def main(config):
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        'subreddit', help='(string) The name of a single subreddit to scan.'
+    )
+    args = parser.parse_args()
+
+    reddit = praw.Reddit(**config)
+    bot = Bot(reddit, args.subreddit)
+
+    while True:
+        try:
+            bot.scan()
+        except ResponseException as e:
+            bot.logger.error(
+                'KLPSARB encountered an error when connecting to Reddit: '
+                f'{e.response.status_code, e.response.reason}'
+            )
+            bot.logger.info('Reconnecting...')
+            sleep(5)
+            continue
+        except KeyboardInterrupt:
+            bot.logger.info('KLPSARB now exiting...')
+            sleep(1)
+            sys.exit(0)
+
+
+if __name__ == '__main__':
+    config = {
+        'user_agent': 'Kali Linux PSA Reddit Bot by u/__ngua__',
+        'client_id': os.environ.get('REDDIT_CLIENT_ID'),
+        'client_secret': os.environ.get('REDDIT_CLIENT_SECRET'),
+        'username': os.environ.get('REDDIT_USERNAME'),
+        'password': os.environ.get('REDDIT_PASSWORD'),
+    }
+    main(config)
