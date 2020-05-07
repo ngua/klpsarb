@@ -10,4 +10,11 @@ pip -r requirements.txt
 chmod +x klpsarb
 ./klpsarb <subreddit>
 ```
+The script requires that the environment variables REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USERNAME, and REDDIT_PASSWORD are set.
 Tested on Arch.
+
+## TODO
+
+- Add support for PRAW's different configuration options.
+- Add support for multiple subreddits.
+- Containerize it for easy cloud deployment.
